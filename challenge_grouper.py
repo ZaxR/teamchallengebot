@@ -8,16 +8,20 @@ from prompt_toolkit.contrib.completers import WordCompleter
 
 class Challenge(object):
 
-    def __init__(self, name):
+    def __init__(self, name: str):
         self.name = name
-        self.participants = pd.DataFrame(columns=['Lines of Code'])
+        self.participants = pd.DataFrame(columns=['Experience Score'])
 
     def add_participant(self, no_cmd_msg: str):
-        # todo improve parse no_cmd_msg
-        name = no_cmd_msg.split(',')[0].strip()
-        lines_of_code = int(no_cmd_msg.split(',')[1].strip())
+        """Add participants one at a time in a <name>, <int> format."""
+        try:
+            name = no_cmd_msg.split(',')[0].strip()
+            experience_score = int(no_cmd_msg.split(',')[1].strip())
+        except:
+            print("Invalid addition. Please enter a name, integter only.")
+            return
 
-        new_df = pd.DataFrame([[name, lines_of_code]], columns=["Name", "Lines of Code"])
+        new_df = pd.DataFrame([[name, experience_score]], columns=["Name", "Experience Score"])
         new_df = new_df.set_index('Name')
 
         self.participants = pd.concat([self.participants[~self.participants.index.isin(new_df.index)], new_df])
@@ -25,7 +29,7 @@ class Challenge(object):
         print(f"{name} added.")
 
     def bulk_add_participants(self, no_cmd_msg: str):
-        # todo improve parse no_cmd_msg
+        """Loads participants from a csv file at the given path."""
         path = no_cmd_msg.strip()
         new_df = pd.read_csv(path, index_col=0)
 
@@ -34,9 +38,10 @@ class Challenge(object):
         print(f"Participants from {path} added.")
 
     def clear_participants(self, no_cmd_msg: str):
+        """Clear all participants."""
         clear_y_n = prompt("Are you sure you want to remove all participants? ")
         if str(clear_y_n).lower() in ["y", "yes"]:
-            self.participants = pd.DataFrame(index=['Name'], columns=['Lines of Code'])
+            self.participants = pd.DataFrame(columns=['Experience Score'])
             print("Aaaall gone.")
         elif str(clear_y_n).lower() in ["n", "no"]:
             print("Ok - we didn't touch anything.")
@@ -44,46 +49,45 @@ class Challenge(object):
             print(f" '{clear_y_n}'' is not a valid command.")
 
     def create_groups(self, no_cmd_msg: str):
-        """Creates groups with one participant per quintile by lines of code written.
-
-        Args:
-                group_size: The number of participants per group; also number of bins.
-                channel: The Slack channel to output to.
-                df: Participants and their lines of code written.
+        """Creates groups with one participant per quantile by any numeric scores.
 
         Example:
-                `@<botname> group 4` will create groups of 4.
+                Typing `group` alone or with non-integers will create groups of 4.
+                An integer can optionally be added to change group size. E.g. `group 3`
 
         """
+        no_cmd_msg = no_cmd_msg.strip()
         df = self.participants.copy()
-        df['Lines of Code'] = df['Lines of Code'].astype('int32')
+        df['Experience Score'] = df['Experience Score'].astype('int32')
         # todo handle group_size of 0 and empty df
 
         try:
             group_size = 4 if not no_cmd_msg else int(no_cmd_msg)
         except ValueError:
-            raise ValueError(f"group_size expects an integer. You input the string {no_cmd_msg}.")
+            print(f"group_size expects an integer. You input the string {no_cmd_msg}.")
+            return
 
         if group_size > df.shape[0]:
-            raise ValueError(f"group_size ({group_size}) is greater than the number of participants ({df.shape[0]}).")
+            print(f"Group 1 {list(df.index)}")
+            return
 
-        # Quantiles are derived from ranked lines_of_code to break ties.
+        # Quantiles are derived from ranked experience_score to break ties.
         # Specifically, method='first' is used to break the ties
-        df['rank'] = df['Lines of Code'].rank(method='first', ascending=False)
+        df['rank'] = df['Experience Score'].rank(method='first', ascending=False)
         df['quantile'] = pd.qcut(df['rank'], group_size, labels=False)
 
         # Shuffle the dataframe
         df = df.sample(frac=1)
         df.index.name = 'Name'
-        print(df)
+
         # Create groups
         groups = defaultdict(list)
         for name, group in df.groupby('quantile'):
-            print(name, group)
             c = 0
             for i, r in group.iterrows():
                 c += 1
                 groups[f"Group {c}"].append(r.name)
+
         # Identify small groups
         small_groups = []
         for group_name, group_members in groups.items():
@@ -105,24 +109,43 @@ class Challenge(object):
             print(f"{k}: {', '.join(v)}")
 
     def list_participants(self, no_cmd_msg: str):
-        # print(self.participants['Name'].tolist())
         print(self.participants)
 
     def remove_participants(self, no_cmd_msg: str):
-        # todo parse no_cmd_msg
+        """Remove one or more participants, separating with commas."""
         participant_names = [i.strip() for i in no_cmd_msg.split(",")]
-        self.participants = self.participants[~self.participants.index.isin(participant_names)]
-        print(f"{participant_names} removed.")
+
+        removed_list = []
+        for name in participant_names:
+            if name in self.participants.index:
+                removed_list.append(name)
+
+        if removed_list:
+            self.participants = self.participants[~self.participants.index.isin(participant_names)]
+            print(f"{removed_list} removed.")
+        else:
+            print(f"No valid names to remove.")
+
+    def save_participants_list(self, no_cmd_msg: str):
+        """Save the list of participants and their experience scores to a csv at the given path."""
+        path = no_cmd_msg.strip()
+        try:
+            self.participants.to_csv(path)
+            print(f"Participants saved to {path}.")
+        except FileNotFoundError:
+            print("Please enter a valid path name.")
 
     def parse_event(self, event_data):
+        """Routes commands to the proper function."""
         message = event_data.strip()
 
         valid_commands = {"add ": self.add_participant,
                           "bulk add ": self.bulk_add_participants,
-                          "clear ": self.clear_participants,
+                          "clear": self.clear_participants,
+                          "group": self.create_groups,
                           "list": self.list_participants,
                           "remove ": self.remove_participants,
-                          "group": self.create_groups}
+                          "save": self.save_participants_list}
 
         for command in valid_commands:
             if message.lower().startswith(command):
@@ -133,7 +156,7 @@ class Challenge(object):
 
 
 def main():
-    command_completer = WordCompleter(['add', 'bulk add', 'clear', 'list', 'remove', 'group'], ignore_case=True)
+    command_completer = WordCompleter(['add', 'bulk add', 'clear', 'group', 'list', 'remove', 'save'], ignore_case=True)
     history = InMemoryHistory()
     challenge = Challenge('Current')
 
@@ -151,5 +174,4 @@ def main():
 
 
 if __name__ == '__main__':
-    challenge = Challenge('Current')
     main()
